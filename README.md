@@ -26,7 +26,8 @@ This tool recreates the JdK Relative Rotation Graph logic using weekly data to s
 ## Usage
 Run the script directly from your terminal:
 ```bash
-python rrg_india.py```
+python rrg_india.py
+```
 
 ### Disclaimer
 *Relative Rotation Graphs® and RRG® are registered trademarks of RRG Research. This repository is an unofficial, open-source, and strictly educational implementation of the mathematical concepts behind sector rotation. It is not affiliated with, endorsed by, or sponsored by RRG Research or Optuma. This tool is for informational purposes only and does not constitute financial advice.*
