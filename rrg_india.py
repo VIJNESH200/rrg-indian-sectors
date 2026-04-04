@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from scipy.interpolate import make_interp_spline
 
 
 @dataclass(frozen=True)
@@ -223,26 +224,47 @@ def plot_rrg(rs_ratio: pd.DataFrame, rs_mom: pd.DataFrame, cfg: Config) -> None:
             points = tail[["x", "y"]].to_numpy()
             n_points = len(points)
 
+            # 1. Plot the Dots and Setup Hover Data
             for j in range(n_points):
                 alpha = 0.1 + 0.9 * (j / max(1, n_points - 1)) if n_points > 1 else 1.0
                 
-                # --- NEW: Append to hover data for interactivity ---
                 date_str = tail.index[j].strftime('%b %d, %Y')
                 hover_data.append((points[j, 0], points[j, 1], date_str, label, color))
 
                 if j == n_points - 1:
+                    # Current week (Large dot with text)
                     sc = ax.scatter(points[j, 0], points[j, 1], color=color, s=95, edgecolor="black", zorder=5)
                     txt = ax.text(points[j, 0] + 0.15, points[j, 1] + 0.15, label, fontsize=9, color=color, weight="bold")
                     artists.extend([sc, txt])
                 else:
+                    # Historical weeks (Small fading dots)
                     sc = ax.scatter(points[j, 0], points[j, 1], color=color, s=28, alpha=alpha, zorder=3)
                     artists.append(sc)
 
-                if j < n_points - 1:
-                    line_alpha = 0.1 + 0.9 * ((j + 0.5) / max(1, n_points - 1))
-                    line, = ax.plot([points[j, 0], points[j+1, 0]], [points[j, 1], points[j+1, 1]], 
-                                    color=color, linewidth=2, alpha=line_alpha, solid_capstyle='round')
+            # 2. Plot the Smooth Fading Spline Curves
+            if n_points >= 3:
+                # Setup the parametric variables
+                t = np.arange(n_points)
+                t_smooth = np.linspace(0, n_points - 1, n_points * 10) # 10x resolution
+                
+                # Calculate the tight quadratic curve (k=2)
+                spl_x = make_interp_spline(t, points[:, 0], k=2) 
+                spl_y = make_interp_spline(t, points[:, 1], k=2)
+                x_smooth, y_smooth = spl_x(t_smooth), spl_y(t_smooth)
+
+                # Draw the smooth curve in micro-segments to keep the fading effect
+                for seg in range(len(t_smooth) - 1):
+                    progress = t_smooth[seg] / max(1, n_points - 1)
+                    line_alpha = 0.1 + 0.9 * progress
+                    line, = ax.plot([x_smooth[seg], x_smooth[seg+1]], [y_smooth[seg], y_smooth[seg+1]], 
+                                    color=color, linewidth=2, alpha=line_alpha, solid_capstyle='round', zorder=2)
                     artists.append(line)
+                    
+            elif n_points == 2:
+                # Fallback to a straight line if exactly 2 points exist
+                line, = ax.plot([points[0, 0], points[1, 0]], [points[0, 1], points[1, 1]], 
+                                color=color, linewidth=2, alpha=0.55, solid_capstyle='round', zorder=2)
+                artists.append(line)
 
             for art in artists:
                 art.set_visible(is_vis)
