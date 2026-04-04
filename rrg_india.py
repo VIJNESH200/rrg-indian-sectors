@@ -11,6 +11,9 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
+import time
+from pathlib import Path
 import sys
 from dataclasses import dataclass
 
@@ -37,34 +40,56 @@ class Config:
     tail_periods: int = 12
 
 
+def _cache_key(cfg: Config) -> str:
+    """Generate a unique hash for the current configuration."""
+    key = f"{cfg.interval}_{cfg.lookback_period}_{cfg.benchmark}_{''.join(cfg.sectors)}"
+    return hashlib.md5(key.encode()).hexdigest()[:8]
+
+
 def download_prices(cfg: Config) -> pd.DataFrame:
-    """Download adjusted close prices for benchmark + sector indices."""
+    """Download adjusted close prices, using a robust local CSV cache."""
+    cache_file = Path(f"rrg_cache_{_cache_key(cfg)}.csv")
     tickers = [cfg.benchmark, *cfg.sectors]
+
+    if cache_file.exists():
+        file_age = time.time() - cache_file.stat().st_mtime
+        if file_age < 3600:
+            try:
+                cached_data = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                cached_data.index = pd.to_datetime(cached_data.index)
+                
+                if all(ticker in cached_data.columns for ticker in tickers):
+                    print(f"Cache hit! File is {file_age/60:.1f} minutes old.")
+                    return cached_data[tickers]
+            except Exception as e:
+                print(f"Cache corrupted ({e}). Re-downloading...")
+                cache_file.unlink(missing_ok=True)
+
+    print("Downloading fresh data from Yahoo Finance...")
     data = yf.download(
-        tickers=tickers,
-        period=cfg.lookback_period,
-        interval=cfg.interval,
-        auto_adjust=True,
-        progress=False,
-        threads=True,
+        tickers=tickers, period=cfg.lookback_period, interval=cfg.interval,
+        auto_adjust=True, progress=False, threads=True
     )
 
     if data.empty:
         raise RuntimeError("No data returned from Yahoo Finance.")
 
-    if "Close" in data.columns:
+    # Bulletproof yfinance column parsing
+    if isinstance(data.columns, pd.MultiIndex):
+        prices = data["Close"].copy()
+    elif "Close" in data.columns:
         prices = data["Close"].copy()
     else:
-        # yfinance returns a regular DataFrame for single ticker,
-        # but we request many tickers; this is just a defensive fallback.
         prices = data.copy()
 
     prices = prices.dropna(how="all").ffill().dropna(how="any")
+    prices.index = pd.to_datetime(prices.index)
 
     missing = set(tickers) - set(prices.columns)
     if missing:
-        raise RuntimeError(f"Missing ticker columns in downloaded data: {sorted(missing)}")
+        raise RuntimeError(f"Missing ticker columns: {sorted(missing)}")
 
+    prices[tickers].to_csv(cache_file)
     return prices[tickers]
 
 
@@ -109,7 +134,7 @@ def compute_rrg_metrics(prices: pd.DataFrame, cfg: Config) -> tuple[pd.DataFrame
 def plot_rrg(rs_ratio: pd.DataFrame, rs_mom: pd.DataFrame, cfg: Config) -> None:
     """Plot Relative Rotation Graph with quadrants and rotational tails."""
     import matplotlib.patches as mpatches
-    from matplotlib.widgets import CheckButtons, Slider
+    from matplotlib.widgets import CheckButtons, Slider, Button
 
     fig, ax = plt.subplots(figsize=(12, 9))
 
@@ -164,101 +189,156 @@ def plot_rrg(rs_ratio: pd.DataFrame, rs_mom: pd.DataFrame, cfg: Config) -> None:
     # Adjust layout to make room for checkboxes and slider
     plt.subplots_adjust(left=0.08, right=0.82, top=0.92, bottom=0.15)
     
-    # Add CheckButtons
-    rax = fig.add_axes([0.84, 0.4, 0.14, 0.4]) # x, y, width, height
-    rax.set_title("Sectors")
-    visibility = [True] * len(labels_list)
-    check = CheckButtons(rax, labels_list, visibility)
-    ax._check_buttons = check  # Retain reference
-    
-    # Match colors with indices
-    for i, lbl in enumerate(labels_list):
-        check.labels[i].set_color(color_by_label[lbl])
-        check.labels[i].set_fontweight("bold")
+    # --- Tracking State & Tooltip Setup ---
+    visibility_state = {lbl: True for lbl in labels_list}
+    hover_data = [] # Stores (x, y, date_str, label, color)
 
-    def toggle_lines(label):
-        # We need the index to determine the visibility status explicitly
-        idx = labels_list.index(label)
-        is_visible = check.get_status()[idx]
-        for artist in lines_by_label[label]:
-            artist.set_visible(is_visible)
-        fig.canvas.draw_idle()
-
-    check.on_clicked(toggle_lines)
+    annot = ax.annotate(
+        "", xy=(0,0), xytext=(12, 12), textcoords="offset points",
+        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="gray", alpha=0.9),
+        fontsize=9, zorder=10
+    )
+    annot.set_visible(False)
 
     def draw_sectors(tail_periods_val):
-        # Clear old lines
+        hover_data.clear() # Reset tooltip data on redraw
+        
+        # Safely remove old lines
         for label, artist_list in lines_by_label.items():
             for artist in artist_list:
-                try:
-                    artist.remove()
-                except ValueError:
-                    pass
+                try: artist.remove()
+                except ValueError: pass
             lines_by_label[label] = []
 
         for i, sector in enumerate(cfg.sectors):
             df = pd.DataFrame({"x": rs_ratio[sector], "y": rs_mom[sector]}).dropna()
             tail = df.tail(tail_periods_val)
-            if tail.empty:
-                continue
+            if tail.empty: continue
 
-            label = sector.replace("^", "")
+            label = labels_list[i]
             color = color_by_label[label]
-            idx = labels_list.index(label)
-            is_vis = check.get_status()[idx]
-
+            is_vis = visibility_state[label] 
             artists = []
+
             points = tail[["x", "y"]].to_numpy()
             n_points = len(points)
-            
-            if n_points == 0:
-                continue
 
-            # Plot segments and scatter points with fading alphas
             for j in range(n_points):
                 alpha = 0.1 + 0.9 * (j / max(1, n_points - 1)) if n_points > 1 else 1.0
                 
-                # Scatter points
+                # --- NEW: Append to hover data for interactivity ---
+                date_str = tail.index[j].strftime('%b %d, %Y')
+                hover_data.append((points[j, 0], points[j, 1], date_str, label, color))
+
                 if j == n_points - 1:
-                    sc = ax.scatter(points[j, 0], points[j, 1], color=color, s=95, edgecolor="black", linewidth=0.6, alpha=1.0, zorder=5)
+                    sc = ax.scatter(points[j, 0], points[j, 1], color=color, s=95, edgecolor="black", zorder=5)
                     txt = ax.text(points[j, 0] + 0.15, points[j, 1] + 0.15, label, fontsize=9, color=color, weight="bold")
                     artists.extend([sc, txt])
                 else:
                     sc = ax.scatter(points[j, 0], points[j, 1], color=color, s=28, alpha=alpha, zorder=3)
                     artists.append(sc)
-                
-                # Connecting lines fading
+
                 if j < n_points - 1:
                     line_alpha = 0.1 + 0.9 * ((j + 0.5) / max(1, n_points - 1))
-                    line, = ax.plot(
-                        [points[j, 0], points[j+1, 0]], 
-                        [points[j, 1], points[j+1, 1]], 
-                        color=color, linewidth=2, alpha=line_alpha, solid_capstyle='round'
-                    )
+                    line, = ax.plot([points[j, 0], points[j+1, 0]], [points[j, 1], points[j+1, 1]], 
+                                    color=color, linewidth=2, alpha=line_alpha, solid_capstyle='round')
                     artists.append(line)
 
             for art in artists:
                 art.set_visible(is_vis)
 
             lines_by_label[label] = artists
-
+            
         fig.canvas.draw_idle()
 
-    # Draw initially
-    draw_sectors(cfg.tail_periods)
+    # --- UI Checkboxes ---
+    rax = fig.add_axes((0.84, 0.35, 0.14, 0.4))
+    rax.set_title("Sectors")
+    check = CheckButtons(rax, labels_list, [True]*len(labels_list))
+    ax._check_buttons = check  # Retain reference
+    
+    for i, lbl in enumerate(labels_list):
+        check.labels[i].set_color(color_by_label[lbl])
+        check.labels[i].set_fontweight("bold")
 
-    # Add Slider axis at the bottom
-    slider_ax = fig.add_axes([0.25, 0.05, 0.5, 0.03])
-    max_history = len(rs_ratio.dropna())
-    slider_valmax = min(90, max_history) if max_history > 0 else 90
-    slider = Slider(
-        ax=slider_ax, 
-        label='Data Points', 
-        valmin=1, 
-        valmax=slider_valmax, 
-        valinit=cfg.tail_periods, 
-        valstep=1
-    )
+    def toggle_lines(label):
+        visibility_state[label] = not visibility_state[label]
+        is_vis = visibility_state[label]
+        for artist in lines_by_label[label]:
+            artist.set_visible(is_vis)
+        
+        # Hide tooltip immediately if sector is toggled off while hovering
+        if not is_vis and annot.get_visible() and label in annot.get_text():
+            annot.set_visible(False)
+            
+        fig.canvas.draw_idle()
+
+    check.on_clicked(toggle_lines)
+
+    # --- NEW: UI Select/Deselect All Buttons ---
+    ax_select = fig.add_axes((0.84, 0.86, 0.14, 0.04))
+    ax_deselect = fig.add_axes((0.84, 0.81, 0.14, 0.04))
+    
+    btn_select = Button(ax_select, 'Select All', hovercolor='0.9')
+    btn_deselect = Button(ax_deselect, 'Deselect All', hovercolor='0.9')
+    
+    # Keep references to prevent matplotlib from garbage-collecting the buttons
+    ax._btn_select = btn_select
+    ax._btn_deselect = btn_deselect
+
+    def select_all(event):
+        for i, lbl in enumerate(labels_list):
+            if not visibility_state[lbl]:
+                check.set_active(i) # Automatically triggers toggle_lines
+                
+    def deselect_all(event):
+        for i, lbl in enumerate(labels_list):
+            if visibility_state[lbl]:
+                check.set_active(i) # Automatically triggers toggle_lines
+
+    btn_select.on_clicked(select_all)
+    btn_deselect.on_clicked(deselect_all)
+
+    # --- UI Hover Logic ---
+    def on_hover(event):
+        if event.inaxes != ax:
+            if annot.get_visible():
+                annot.set_visible(False)
+                fig.canvas.draw_idle()
+            return
+
+        best_dist = float('inf')
+        best_pt = None
+
+        # Find closest point, ignoring hidden sectors
+        for hx, hy, date_str, lbl, color in hover_data:
+            if not visibility_state[lbl]: continue 
+
+            dist = (hx - event.xdata)**2 + (hy - event.ydata)**2
+            if dist < best_dist:
+                best_dist = dist
+                best_pt = (hx, hy, date_str, lbl, color)
+
+        if best_dist < 0.2: # Hit threshold
+            hx, hy, date_str, lbl, color = best_pt
+            annot.xy = (hx, hy)
+            annot.set_text(f"{lbl}\nDate: {date_str}\nRatio: {hx:.2f}\nMom: {hy:.2f}")
+            annot.get_bbox_patch().set_edgecolor(color)
+            annot.set_visible(True)
+            fig.canvas.draw_idle()
+        else:
+            if annot.get_visible():
+                annot.set_visible(False)
+                fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("motion_notify_event", on_hover)
+
+    # --- UI Slider (Capped at 24) ---
+    slider_ax = fig.add_axes((0.25, 0.05, 0.5, 0.03))
+    max_history = len(rs_ratio.dropna(how="all"))
+    slider_valmax = min(24, max_history) if max_history > 0 else 24
+    
+    slider = Slider(ax=slider_ax, label='Data Points', valmin=1, valmax=slider_valmax, valinit=min(cfg.tail_periods, slider_valmax), valstep=1)
     ax._slider = slider
 
     def update_slider(val):
@@ -266,6 +346,7 @@ def plot_rrg(rs_ratio: pd.DataFrame, rs_mom: pd.DataFrame, cfg: Config) -> None:
         
     slider.on_changed(update_slider)
 
+    draw_sectors(cfg.tail_periods)
     plt.show()
 
 
