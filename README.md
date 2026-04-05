@@ -12,7 +12,6 @@ This tool recreates the JdK Relative Rotation Graph logic using weekly data to s
 
 ## Key Features Engineered
 * **Robust Data Pipeline:** Custom 1-hour CSV caching mechanism to prevent Yahoo Finance rate-limiting during active market analysis.
-* **State-Managed UI:** Independent Python dictionary tracking to bypass Matplotlib garbage-collection bugs during rapid slider redrawing, keeping sector checkboxes perfectly synchronized.
 * **Interactive Diagnostics:** Precision hover-tooltips displaying localized dates, RS-Ratio, and RS-Momentum for specific sector events.
 * **Streamlined Control Panel:** Custom "Select All" and "Deselect All" Matplotlib button widgets for rapid sector isolation.
 
