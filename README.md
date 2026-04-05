@@ -16,6 +16,10 @@ This tool recreates the JdK Relative Rotation Graph logic using weekly data to s
 * **Interactive Diagnostics:** Precision hover-tooltips displaying localized dates, RS-Ratio, and RS-Momentum for specific sector events.
 * **Streamlined Control Panel:** Custom "Select All" and "Deselect All" Matplotlib button widgets for rapid sector isolation.
 
+## Screenshots
+<img width="1919" height="1020" alt="image" src="https://github.com/user-attachments/assets/abc7e5c3-8f83-4a66-8b02-32de4f9480cc" />
+<img width="1919" height="971" alt="image" src="https://github.com/user-attachments/assets/9b4f5825-820b-4f2e-aaf4-10487a8417b1" />
+
 ## Dependencies
 * Python 3.8+
 * `yfinance`
