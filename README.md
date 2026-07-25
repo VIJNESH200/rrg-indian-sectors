@@ -9,6 +9,8 @@ An interactive, high-performance Python application for visualizing and analyzin
 
 This tool implements the mathematical foundation of Julius de Kempenaer's (JdK) Relative Rotation Graph logic using weekly data intervals to filter out daily market noise, allowing traders, quantitative analysts, and investors to identify medium-term sector rotation and momentum shifts in the National Stock Exchange (NSE) equity market.
 
+![Relative Rotation Graph Dashboard](assets/rrg_dashboard.png)
+
 ---
 
 ## 🌟 Key Features
