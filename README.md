@@ -1,6 +1,7 @@
 # 📈 Relative Rotation Graph (RRG) - Indian Sectors
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/VIJNESH200/rrg-indian-sectors/actions/workflows/ci.yml/badge.svg)](https://github.com/VIJNESH200/rrg-indian-sectors/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![yfinance](https://img.shields.io/badge/data-yfinance-green.svg)](https://pypi.org/project/yfinance/)
 [![Matplotlib](https://img.shields.io/badge/GUI-Matplotlib-orange.svg)](https://matplotlib.org/)
